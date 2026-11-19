@@ -2,12 +2,41 @@ const $ = id => document.getElementById(id);
 const get = p => fetch(p).then(r => r.json());
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// --- admin token: speed controls only work with the token the server printed (or ADMIN_TOKEN) ---
+const store = {
+  get: () => { try { return localStorage.getItem('adminToken') || ''; } catch { return ''; } },
+  set: v => { try { v ? localStorage.setItem('adminToken', v) : localStorage.removeItem('adminToken'); } catch {} },
+};
+let adminToken = store.get();
+const admin = (path, body) => fetch(path, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+  body: JSON.stringify(body || {}),
+});
+function showAdmin(on, msg = '') {
+  $('speed').hidden = !on;
+  $('admin-login').hidden = on;
+  $('admin-msg').textContent = msg;
+}
+async function unlock(token) {
+  adminToken = token;
+  const ok = token && (await admin('/api/admin/check').then(r => r.ok, () => false));
+  if (ok) store.set(token); else { adminToken = ''; store.set(''); }
+  showAdmin(ok, ok || !token ? '' : 'wrong token');
+}
+$('admin-login').onsubmit = e => { e.preventDefault(); unlock($('admin-token').value.trim()); $('admin-token').value = ''; };
+$('lock').onclick = () => { adminToken = ''; store.set(''); showAdmin(false); };
+unlock(adminToken);
+
 // speed buttons
-for (const b of document.querySelectorAll('#speed button')) {
-  b.onclick = () => fetch('/api/admin/speed', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ speed: +b.dataset.spd }) });
+for (const b of document.querySelectorAll('#speed button[data-spd]')) {
+  b.onclick = async () => {
+    const r = await admin('/api/admin/speed', { speed: +b.dataset.spd });
+    if (r.status === 401) { adminToken = ''; store.set(''); showAdmin(false, 'token expired, unlock again'); }
+  };
 }
 function setActiveSpeed(speed) {
-  for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.spd === speed);
+  for (const b of document.querySelectorAll('#speed button[data-spd]')) b.classList.toggle('on', +b.dataset.spd === speed);
 }
 
 // thought display — fade out old, fade in new

@@ -16,6 +16,11 @@
   #speed button { padding: 3px 9px; font: 12px 'Courier New', monospace; background: var(--dim); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
   #speed button:hover { border-color: var(--muted); color: var(--text); }
   #speed button.on { background: var(--pulse); border-color: var(--pulse); color: #fff; }
+  #speed[hidden], #admin-login[hidden] { display: none; }
+  #admin-login { display: flex; gap: 4px; margin-left: 12px; }
+  #admin-login input { width: 130px; padding: 3px 6px; font: 12px 'Courier New', monospace; background: var(--dim); color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
+  #admin-login button { padding: 3px 9px; font: 12px 'Courier New', monospace; background: var(--dim); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #admin-msg { color: var(--muted); font-size: 12px; margin-left: 8px; }
 
   main { flex: 1; display: flex; min-height: 0; }
 
@@ -50,12 +55,18 @@
 <header>
   <h1>A New World</h1>
   <span class="clock" id="clock">Day 1 · 00:00</span>
-  <div id="speed">
+  <form id="admin-login">
+    <input id="admin-token" type="password" placeholder="admin token" autocomplete="current-password" aria-label="Admin token">
+    <button type="submit">🔒 unlock</button>
+  </form>
+  <span id="admin-msg"></span>
+  <div id="speed" hidden>
     <button data-spd="0">⏸</button>
     <button data-spd="1" class="on">▶ ×1</button>
     <button data-spd="2">⏩ ×2</button>
     <button data-spd="10">⏭ ×10</button>
     <button data-spd="100">⚡ ×100</button>
+    <button id="lock" type="button" title="Forget admin token">🔓</button>
   </div>
 </header>
 <main>

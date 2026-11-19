@@ -1,1 +1,3 @@
 node_modules/
+# runtime data: Bob's memory lives here and is created on first run
+data/

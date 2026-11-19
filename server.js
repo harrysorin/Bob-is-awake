@@ -3,10 +3,24 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { think } from './brain.js';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = +process.env.PORT || 3001;
+// Listen only on this computer unless HOST is set (e.g. HOST=0.0.0.0 to expose on the network).
+const HOST = process.env.HOST || '127.0.0.1';
+
+// --- admin auth: only someone with ADMIN_TOKEN may change speed or force a thought ---
+// If ADMIN_TOKEN is not set, a random one is generated at startup and printed to the console,
+// so only the person running the server can see it.
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || randomBytes(24).toString('base64url');
+const sha = s => createHash('sha256').update(String(s)).digest();
+const ADMIN_HASH = sha(ADMIN_TOKEN);
+function isAdmin(req) {
+  const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+  return !!m && timingSafeEqual(sha(m[1]), ADMIN_HASH);
+}
 
 // --- dynamic game clock ---
 let SPEED = 1;
@@ -21,6 +35,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
   CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, day TEXT, hm TEXT, kind TEXT, text TEXT);
   CREATE TABLE IF NOT EXISTS diary (id INTEGER PRIMARY KEY, day TEXT, text TEXT);
+  -- one diary entry per day; needed by the upsert in writeDiary (also fixes older databases)
+  CREATE UNIQUE INDEX IF NOT EXISTS diary_day ON diary(day);
 `);
 const kvGet = k => { const r = db.prepare('SELECT v FROM kv WHERE k=?').get(k); return r ? JSON.parse(r.v) : null; };
 const kvSet = (k, v) => db.prepare('INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, JSON.stringify(v));
@@ -52,7 +68,7 @@ let lastDiaryDay = kvGet('lastDiaryDay') || 0;
 
 // --- tick ---
 let last = gameNow(), lastReal = Date.now();
-const THINK_INTERVAL = 10 * 60_000; // every 10 game-minutes
+const THINK_INTERVAL = 60_000; // every game-minute
 
 function tick() {
   lastReal = Date.now();
@@ -120,13 +136,18 @@ createServer(async (req, res) => {
   if (p === '/api/events') return json(res, 200, db.prepare('SELECT hm, kind, text FROM events ORDER BY id DESC LIMIT 100').all());
   if (p === '/api/diary')  return json(res, 200, db.prepare('SELECT day, text FROM diary ORDER BY id DESC').all());
 
-  if (p === '/api/admin/speed' && req.method === 'POST') {
-    let body = ''; for await (const chunk of req) body += chunk;
-    const s = +JSON.parse(body || '{}').speed;
+  if (p.startsWith('/api/admin/')) {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+    if (!isAdmin(req)) return json(res, 401, { error: 'unauthorized' });
+  }
+  if (p === '/api/admin/check') return json(res, 200, { ok: true });
+  if (p === '/api/admin/speed') {
+    let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 1024) return json(res, 413, { error: 'too large' }); }
+    let s; try { s = +JSON.parse(body || '{}').speed; } catch { return json(res, 400, { error: 'bad json' }); }
     if (![0, 1, 2, 10, 100].includes(s)) return json(res, 400, { error: 'invalid speed' });
     setSpeed(s); return json(res, 200, { ok: true, speed: SPEED });
   }
-  if (p === '/api/admin/think' && req.method === 'POST') {
+  if (p === '/api/admin/think') {
     lastThoughtTime = 0; // force next tick to think immediately
     return json(res, 200, { ok: true });
   }
@@ -136,7 +157,10 @@ createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': MIME[fp.split('.').pop()] || 'application/octet-stream' });
     res.end(readFileSync(fp));
   } catch { res.writeHead(404); res.end(); }
-}).listen(PORT, () => console.log(`A New World: http://localhost:${PORT}  (speed x${SPEED})`));
+}).listen(PORT, HOST, () => {
+  console.log(`A New World: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}  (speed x${SPEED})`);
+  if (!process.env.ADMIN_TOKEN) console.log(`[admin] no ADMIN_TOKEN set; this run's token is: ${ADMIN_TOKEN}`);
+});
 
 setInterval(tick, 250);
 (function save() { kvSet('state', S); setTimeout(save, 10_000); })();
