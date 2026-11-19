@@ -1,0 +1,142 @@
+import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { think } from './brain.js';
+
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const PORT = +process.env.PORT || 3001;
+
+// --- dynamic game clock ---
+let SPEED = 1;
+let _realBase = Date.now(), _gameBase = Date.now();
+const gameNow = () => _gameBase + (Date.now() - _realBase) * SPEED;
+function setSpeed(s) { _gameBase = gameNow(); _realBase = Date.now(); SPEED = s; console.log(`[speed] x${s}`); }
+
+// --- DB ---
+mkdirSync(join(ROOT, 'data'), { recursive: true });
+const db = new DatabaseSync(join(ROOT, 'data', 'world.db'));
+db.exec(`
+  CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, day TEXT, hm TEXT, kind TEXT, text TEXT);
+  CREATE TABLE IF NOT EXISTS diary (id INTEGER PRIMARY KEY, day TEXT, text TEXT);
+`);
+const kvGet = k => { const r = db.prepare('SELECT v FROM kv WHERE k=?').get(k); return r ? JSON.parse(r.v) : null; };
+const kvSet = (k, v) => db.prepare('INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, JSON.stringify(v));
+
+// --- epoch: when this consciousness first awoke ---
+const EPOCH = (() => { const e = kvGet('epoch'); if (e) return e; const n = Date.now(); kvSet('epoch', n); return n; })();
+
+function clock(ms) {
+  const elapsed = Math.max(0, ms - EPOCH);
+  const totalMin = Math.floor(elapsed / 60_000);
+  const day = Math.floor(totalMin / 1440) + 1;
+  const minOfDay = totalMin % 1440;
+  const h = Math.floor(minOfDay / 60), m = minOfDay % 60;
+  return { day, h, m, hm: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`, totalMin };
+}
+const dayKey = ms => `Day ${clock(ms).day}`;
+
+function logEvent(kind, text) {
+  const c = clock(gameNow());
+  db.prepare('INSERT INTO events(day,hm,kind,text) VALUES(?,?,?,?)').run(dayKey(gameNow()), c.hm, kind, text);
+  broadcast({ type: 'event', kind, text, hm: c.hm });
+}
+
+// --- state ---
+let S = kvGet('state') || { thought: '' };
+let thinking = false, diaryWriting = false;
+let lastThoughtTime = 0, lastThoughtText = '';
+let lastDiaryDay = kvGet('lastDiaryDay') || 0;
+
+// --- tick ---
+let last = gameNow(), lastReal = Date.now();
+const THINK_INTERVAL = 10 * 60_000; // every 10 game-minutes
+
+function tick() {
+  lastReal = Date.now();
+  if (SPEED === 0) return;
+  const now = gameNow();
+  last = now;
+  const c = clock(now);
+
+  // periodic thought
+  if (!thinking && now - lastThoughtTime > THINK_INTERVAL) {
+    lastThoughtTime = now;
+    doThink(c);
+  }
+
+  // diary at the start of each new day (h=0, m < 10)
+  if (!diaryWriting && c.h === 0 && c.m < 10 && c.day > 1 && c.day !== lastDiaryDay) {
+    lastDiaryDay = c.day;
+    kvSet('lastDiaryDay', c.day);
+    writeDiary(`Day ${c.day - 1}`);
+  }
+
+  broadcast({ type: 'state', thought: S.thought, clock: c, speed: SPEED });
+}
+
+async function doThink(c) {
+  thinking = true;
+  try {
+    const events = db.prepare('SELECT hm, text FROM events WHERE day=? ORDER BY id DESC LIMIT 10').all(dayKey(gameNow())).reverse();
+    const r = await think('think', { clock: c, thought: S.thought, events, lastThought: lastThoughtText !== S.thought ? S.thought : '' });
+    lastThoughtText = S.thought;
+    S.thought = r.thought;
+    kvSet('state', S);
+    logEvent('thought', r.thought);
+  } catch (e) { console.warn('[brain] think failed:', e.message); }
+  thinking = false;
+}
+
+async function writeDiary(day) {
+  diaryWriting = true;
+  try {
+    const events = db.prepare('SELECT hm, text FROM events WHERE day=? ORDER BY id').all(day);
+    if (!events.length) { diaryWriting = false; return; }
+    const r = await think('diary', { day, events });
+    db.prepare('INSERT INTO diary(day,text) VALUES(?,?) ON CONFLICT(day) DO UPDATE SET text=excluded.text').run(day, r.entry);
+    broadcast({ type: 'diary' });
+  } catch (e) { console.warn('[brain] diary failed:', e.message); }
+  diaryWriting = false;
+}
+
+// --- SSE ---
+const clients = new Set();
+function broadcast(obj) { const d = `data: ${JSON.stringify(obj)}\n\n`; for (const r of clients) r.write(d); }
+
+// --- HTTP ---
+const MIME = { html: 'text/html', js: 'application/javascript', css: 'text/css', png: 'image/png', ttf: 'font/ttf', json: 'application/json' };
+function json(res, status, obj) { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); }
+
+createServer(async (req, res) => {
+  const p = new URL(req.url, 'http://x').pathname;
+
+  if (p === '/api/stream') {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    clients.add(res); req.on('close', () => clients.delete(res)); return;
+  }
+  if (p === '/api/events') return json(res, 200, db.prepare('SELECT hm, kind, text FROM events ORDER BY id DESC LIMIT 100').all());
+  if (p === '/api/diary')  return json(res, 200, db.prepare('SELECT day, text FROM diary ORDER BY id DESC').all());
+
+  if (p === '/api/admin/speed' && req.method === 'POST') {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const s = +JSON.parse(body || '{}').speed;
+    if (![0, 1, 2, 10, 100].includes(s)) return json(res, 400, { error: 'invalid speed' });
+    setSpeed(s); return json(res, 200, { ok: true, speed: SPEED });
+  }
+  if (p === '/api/admin/think' && req.method === 'POST') {
+    lastThoughtTime = 0; // force next tick to think immediately
+    return json(res, 200, { ok: true });
+  }
+
+  try {
+    const fp = join(ROOT, 'public', (p === '/' ? '/index.html' : p).replace(/\.\./g, ''));
+    res.writeHead(200, { 'content-type': MIME[fp.split('.').pop()] || 'application/octet-stream' });
+    res.end(readFileSync(fp));
+  } catch { res.writeHead(404); res.end(); }
+}).listen(PORT, () => console.log(`A New World: http://localhost:${PORT}  (speed x${SPEED})`));
+
+setInterval(tick, 250);
+(function save() { kvSet('state', S); setTimeout(save, 10_000); })();
