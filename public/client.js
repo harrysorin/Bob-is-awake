@@ -1,6 +1,5 @@
 const $ = id => document.getElementById(id);
 const get = p => fetch(p).then(r => r.json());
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // --- admin token: speed controls only work with the token the server printed (or ADMIN_TOKEN) ---
 const store = {
@@ -8,11 +7,16 @@ const store = {
   set: v => { try { v ? localStorage.setItem('adminToken', v) : localStorage.removeItem('adminToken'); } catch {} },
 };
 let adminToken = store.get();
-const admin = (path, body) => fetch(path, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-  body: JSON.stringify(body || {}),
-});
+let lastAdminError = '';
+const admin = async (path, body) => {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify(body || {}),
+  });
+  lastAdminError = r.ok ? '' : (await r.clone().json().catch(() => ({}))).error || '';
+  return r;
+};
 function showAdmin(on, msg = '') {
   $('speed').hidden = !on;
   $('admin-login').hidden = on;
@@ -22,7 +26,7 @@ async function unlock(token) {
   adminToken = token;
   const ok = token && (await admin('/api/admin/check').then(r => r.ok, () => false));
   if (ok) store.set(token); else { adminToken = ''; store.set(''); }
-  showAdmin(ok, ok || !token ? '' : 'wrong token');
+  showAdmin(ok, ok || !token ? '' : lastAdminError || 'wrong token');
 }
 $('admin-login').onsubmit = e => { e.preventDefault(); unlock($('admin-token').value.trim()); $('admin-token').value = ''; };
 $('lock').onclick = () => { adminToken = ''; store.set(''); showAdmin(false); };
@@ -67,17 +71,21 @@ function render(s) {
   else statusEl.textContent = `Day ${s.clock.day} · ${s.clock.hm}`;
 }
 
+// build DOM with textContent only: model text is never parsed as HTML
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const note = text => el('p', 'note', text);
+
 async function loadDiary() {
   const d = await get('/api/diary');
-  $('diary').innerHTML = d.length
-    ? d.map(e => `<div class="entry"><div class="day-label">${esc(e.day)}</div><div class="body">${esc(e.text)}</div></div>`).join('')
-    : '<p class="note">No diary yet. It writes one at the end of each day.</p>';
+  $('diary').replaceChildren(...(d.length
+    ? d.map(e => { const n = el('div', 'entry'); n.append(el('div', 'day-label', e.day), el('div', 'body', e.text)); return n; })
+    : [note('No diary yet. It writes one at the end of each day.')]));
 }
 async function loadLog() {
   const ev = await get('/api/events');
-  $('log').innerHTML = ev.length
-    ? ev.map(e => `<div class="log-line"><span>${esc(e.hm)}</span>${esc(e.text)}</div>`).join('')
-    : '<p class="note">Nothing yet.</p>';
+  $('log').replaceChildren(...(ev.length
+    ? ev.map(e => { const n = el('div', 'log-line'); n.append(el('span', null, e.hm), String(e.text ?? '')); return n; })
+    : [note('Nothing yet.')]));
 }
 
 for (const b of document.querySelectorAll('.tabs button')) b.onclick = () => {

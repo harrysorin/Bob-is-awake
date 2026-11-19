@@ -17,10 +17,21 @@ const HOST = process.env.HOST || '127.0.0.1';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || randomBytes(24).toString('base64url');
 const sha = s => createHash('sha256').update(String(s)).digest();
 const ADMIN_HASH = sha(ADMIN_TOKEN);
+// A long random token can't be guessed, so no lockout is needed (a lockout would let anyone lock the owner out).
+if (process.env.ADMIN_TOKEN && ADMIN_TOKEN.length < 16) {
+  console.error('[admin] ADMIN_TOKEN must be at least 16 characters (try: openssl rand -base64 24)');
+  process.exit(1);
+}
 function isAdmin(req) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
   return !!m && timingSafeEqual(sha(m[1]), ADMIN_HASH);
 }
+// The token must never cross a network in plain text. Admin requests are accepted only from this
+// machine: a browser here, or an HTTPS tunnel (Tailscale Funnel, Cloudflare Tunnel...) that runs
+// here and forwards to localhost. Plain-HTTP requests from other machines are refused.
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const isLocal = req => LOOPBACK.has(req.socket.remoteAddress);
+
 
 // --- dynamic game clock ---
 let SPEED = 1;
@@ -138,7 +149,15 @@ async function writeDiary(n) {
 
 // --- SSE ---
 const clients = new Set();
-function broadcast(obj) { const d = `data: ${JSON.stringify(obj)}\n\n`; for (const r of clients) r.write(d); }
+const MAX_STREAMS = +process.env.MAX_STREAMS || 20;   // live viewers at once
+const MAX_BUFFERED = 64 * 1024;                       // drop a viewer that stops reading
+function broadcast(obj) {
+  const d = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const r of clients) {
+    if (r.writableLength > MAX_BUFFERED) { clients.delete(r); r.destroy(); continue; }
+    r.write(d);
+  }
+}
 
 // --- HTTP ---
 const MIME = { html: 'text/html', js: 'application/javascript', css: 'text/css', png: 'image/png', ttf: 'font/ttf', json: 'application/json' };
@@ -148,14 +167,16 @@ createServer(async (req, res) => {
   const p = new URL(req.url, 'http://x').pathname;
 
   if (p === '/api/stream') {
+    if (clients.size >= MAX_STREAMS) return json(res, 503, { error: 'too many viewers' });
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-    clients.add(res); req.on('close', () => clients.delete(res)); return;
+    clients.add(res); res.on('close', () => clients.delete(res)); return;
   }
   if (p === '/api/events') return json(res, 200, db.prepare('SELECT hm, kind, text FROM events ORDER BY id DESC LIMIT 100').all());
   if (p === '/api/diary')  return json(res, 200, db.prepare('SELECT day, text FROM diary ORDER BY id DESC').all());
 
   if (p.startsWith('/api/admin/')) {
     if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+    if (!isLocal(req)) return json(res, 403, { error: 'admin only over HTTPS tunnel or on this computer' });
     if (!isAdmin(req)) return json(res, 401, { error: 'unauthorized' });
   }
   if (p === '/api/admin/check') return json(res, 200, { ok: true });

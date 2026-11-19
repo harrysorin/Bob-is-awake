@@ -48,6 +48,17 @@
   .log-line { padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
   .log-line span { color: var(--pulse); margin-right: 6px; }
   .note { color: var(--muted); font-size: 12px; font-style: italic; }
+  /* phones: stack the void above the diary/log, let the header wrap */
+  @media (max-width: 700px) {
+    body { height: 100dvh; }
+    header { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+    .clock { margin-left: auto; }
+    #speed, #admin-login { margin-left: 0; flex-wrap: wrap; }
+    main { flex-direction: column; }
+    #void { flex: 0 0 38%; }
+    #thought { font-size: 16px; }
+    aside { width: auto; flex: 1; min-height: 0; border-left: 0; border-top: 1px solid var(--line); }
+  }
   ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: var(--void); } ::-webkit-scrollbar-thumb { background: var(--line); }
 </style>
 </head>
