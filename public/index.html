@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A New World</title>
+<style>
+  :root { --void: #07070f; --dim: #0f0f1e; --line: #1a1a2e; --text: #c8c8e0; --muted: #4a4a6a; --pulse: #3a6be8; --accent: #7eb8ff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--void); color: var(--text); font: 14px/1.6 'Courier New', monospace; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  header h1 { font-size: 15px; color: var(--accent); letter-spacing: .1em; text-transform: uppercase; }
+  .clock { margin-left: auto; color: var(--muted); font-size: 13px; }
+  #speed { display: flex; gap: 4px; margin-left: 12px; }
+  #speed button { padding: 3px 9px; font: 12px 'Courier New', monospace; background: var(--dim); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #speed button:hover { border-color: var(--muted); color: var(--text); }
+  #speed button.on { background: var(--pulse); border-color: var(--pulse); color: #fff; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+
+  /* void: the empty world */
+  #void { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  #void::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, #0d0d20 0%, var(--void) 70%); pointer-events: none; }
+  #void-grid { position: absolute; inset: 0; opacity: .07; background-image: linear-gradient(var(--pulse) 1px, transparent 1px), linear-gradient(90deg, var(--pulse) 1px, transparent 1px); background-size: 60px 60px; }
+  #thought-area { position: relative; max-width: 560px; text-align: center; padding: 0 24px; }
+  #thought { font-size: 18px; line-height: 1.7; color: var(--text); min-height: 2em; transition: opacity .6s; }
+  #thought.fading { opacity: 0; }
+  #thought-cursor { display: inline-block; width: 2px; height: 1.1em; background: var(--accent); vertical-align: middle; animation: blink 1.1s infinite; margin-left: 3px; }
+  @keyframes blink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+  #status-line { margin-top: 20px; color: var(--muted); font-size: 12px; letter-spacing: .05em; }
+
+  /* side panel */
+  aside { width: 340px; border-left: 1px solid var(--line); background: var(--dim); display: flex; flex-direction: column; }
+  .tabs { display: flex; gap: 4px; padding: 8px 12px 0; flex-shrink: 0; }
+  .tabs button { padding: 5px 12px; font: 12px 'Courier New', monospace; background: var(--dim); color: var(--muted); border: 1px solid var(--line); border-radius: 4px 4px 0 0; cursor: pointer; }
+  .tabs button.on { background: var(--void); border-color: var(--accent); color: var(--accent); }
+  .pane { flex: 1; overflow-y: auto; padding: 12px 16px; background: var(--void); margin: 0 12px 12px; border: 1px solid var(--line); border-radius: 0 4px 4px 4px; }
+  .pane[hidden] { display: none; }
+  .entry { margin-bottom: 16px; }
+  .entry .day-label { color: var(--accent); font-size: 11px; letter-spacing: .08em; margin-bottom: 4px; }
+  .entry .body { color: var(--text); font-size: 13px; line-height: 1.6; }
+  .log-line { padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .log-line span { color: var(--pulse); margin-right: 6px; }
+  .note { color: var(--muted); font-size: 12px; font-style: italic; }
+  ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: var(--void); } ::-webkit-scrollbar-thumb { background: var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <h1>A New World</h1>
+  <span class="clock" id="clock">Day 1 · 00:00</span>
+  <div id="speed">
+    <button data-spd="0">⏸</button>
+    <button data-spd="1" class="on">▶ ×1</button>
+    <button data-spd="2">⏩ ×2</button>
+    <button data-spd="10">⏭ ×10</button>
+    <button data-spd="100">⚡ ×100</button>
+  </div>
+</header>
+<main>
+  <div id="void">
+    <div id="void-grid"></div>
+    <div id="thought-area">
+      <div id="thought"><span id="cursor" class="fading">…</span><span id="thought-cursor"></span></div>
+      <div id="status-line">awakening</div>
+    </div>
+  </div>
+  <aside>
+    <div class="tabs">
+      <button data-tab="diary" class="on">Diary</button>
+      <button data-tab="log">Log</button>
+    </div>
+    <div class="pane" id="diary"><p class="note">No diary yet. It writes one at the end of each day.</p></div>
+    <div class="pane" id="log" hidden></div>
+  </aside>
+</main>
+<script type="module" src="/client.js"></script>
+</body>
+</html>
