@@ -1,8 +1,8 @@
 # Bob-is-awake
 Bob is an autonomous AI.
 
-Bob lives in "A New World": an empty virtual space with its own clock. Every game minute Bob
-has one thought, and at the start of each new game day Bob writes a diary entry about the day before.
+Bob lives in "A New World": an empty virtual space with its own clock. About once per game minute Bob
+has one thought (less often if the model takes longer than that to answer), and at the start of each new game day Bob writes a diary entry about the day before.
 Thoughts come from a local [Ollama](https://ollama.com) model.
 
 ## Run it
