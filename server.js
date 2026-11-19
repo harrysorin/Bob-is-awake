@@ -36,10 +36,14 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, day TEXT, hm TEXT, kind TEXT, text TEXT);
   CREATE TABLE IF NOT EXISTS diary (id INTEGER PRIMARY KEY, day TEXT, text TEXT);
   -- one diary entry per day; needed by the upsert in writeDiary (also fixes older databases)
+  DELETE FROM diary WHERE id NOT IN (SELECT MAX(id) FROM diary GROUP BY day);
   CREATE UNIQUE INDEX IF NOT EXISTS diary_day ON diary(day);
 `);
 const kvGet = k => { const r = db.prepare('SELECT v FROM kv WHERE k=?').get(k); return r ? JSON.parse(r.v) : null; };
 const kvSet = (k, v) => db.prepare('INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, JSON.stringify(v));
+
+// resume the game clock where it stopped, so a restart after running fast doesn't move time backward
+_gameBase = Math.max(_gameBase, kvGet('gameTime') || 0);
 
 // --- epoch: when this consciousness first awoke ---
 const EPOCH = (() => { const e = kvGet('epoch'); if (e) return e; const n = Date.now(); kvSet('epoch', n); return n; })();
@@ -64,7 +68,9 @@ function logEvent(kind, text) {
 let S = kvGet('state') || { thought: '' };
 let thinking = false, diaryWriting = false;
 let lastThoughtTime = 0, lastThoughtText = '';
+// lastDiaryDay = N means diaries up to Day N-1 are done (or had nothing to write)
 let lastDiaryDay = kvGet('lastDiaryDay') || 0;
+let lastDiaryAttempt = 0;
 
 // --- tick ---
 let last = gameNow(), lastReal = Date.now();
@@ -72,10 +78,11 @@ const THINK_INTERVAL = 60_000; // every game-minute
 
 function tick() {
   lastReal = Date.now();
-  if (SPEED === 0) return;
   const now = gameNow();
   last = now;
   const c = clock(now);
+  // while paused, keep viewers up to date but don't think or write
+  if (SPEED === 0) return broadcast({ type: 'state', thought: S.thought, clock: c, speed: SPEED });
 
   // periodic thought
   if (!thinking && now - lastThoughtTime > THINK_INTERVAL) {
@@ -83,11 +90,11 @@ function tick() {
     doThink(c);
   }
 
-  // diary at the start of each new day (h=0, m < 10)
-  if (!diaryWriting && c.h === 0 && c.m < 10 && c.day > 1 && c.day !== lastDiaryDay) {
-    lastDiaryDay = c.day;
-    kvSet('lastDiaryDay', c.day);
-    writeDiary(`Day ${c.day - 1}`);
+  // diary for every finished day that doesn't have one yet (catches up after downtime, retries failures)
+  const nextDiary = Math.max(1, lastDiaryDay);
+  if (!diaryWriting && nextDiary < c.day && Date.now() - lastDiaryAttempt > 60_000) {
+    lastDiaryAttempt = Date.now();
+    writeDiary(nextDiary);
   }
 
   broadcast({ type: 'state', thought: S.thought, clock: c, speed: SPEED });
@@ -106,15 +113,26 @@ async function doThink(c) {
   thinking = false;
 }
 
-async function writeDiary(day) {
+const DIARY_MAX_EVENTS = 60; // a day has ~1440 thoughts; keep the prompt inside the model's context
+
+async function writeDiary(n) {
   diaryWriting = true;
+  const day = `Day ${n}`;
   try {
-    const events = db.prepare('SELECT hm, text FROM events WHERE day=? ORDER BY id').all(day);
-    if (!events.length) { diaryWriting = false; return; }
-    const r = await think('diary', { day, events });
-    db.prepare('INSERT INTO diary(day,text) VALUES(?,?) ON CONFLICT(day) DO UPDATE SET text=excluded.text').run(day, r.entry);
-    broadcast({ type: 'diary' });
-  } catch (e) { console.warn('[brain] diary failed:', e.message); }
+    let events = db.prepare('SELECT hm, text FROM events WHERE day=? ORDER BY id').all(day);
+    if (events.length > DIARY_MAX_EVENTS) {
+      const step = events.length / DIARY_MAX_EVENTS;
+      events = Array.from({ length: DIARY_MAX_EVENTS }, (_, i) => events[Math.floor(i * step)]);
+    }
+    if (events.length) {
+      const r = await think('diary', { day, events });
+      db.prepare('INSERT INTO diary(day,text) VALUES(?,?) ON CONFLICT(day) DO UPDATE SET text=excluded.text').run(day, r.entry);
+      broadcast({ type: 'diary' });
+    }
+    lastDiaryDay = n + 1;
+    kvSet('lastDiaryDay', lastDiaryDay);
+    lastDiaryAttempt = 0;
+  } catch (e) { console.warn('[brain] diary failed, will retry:', e.message); }
   diaryWriting = false;
 }
 
@@ -148,8 +166,10 @@ createServer(async (req, res) => {
     setSpeed(s); return json(res, 200, { ok: true, speed: SPEED });
   }
   if (p === '/api/admin/think') {
-    lastThoughtTime = 0; // force next tick to think immediately
-    return json(res, 200, { ok: true });
+    lastThoughtTime = gameNow(); // restart the regular interval from now
+    const started = !thinking;
+    if (started) doThink(clock(gameNow())); // think right away, even while paused
+    return json(res, 200, { ok: true, started });
   }
 
   try {
@@ -163,4 +183,8 @@ createServer(async (req, res) => {
 });
 
 setInterval(tick, 250);
-(function save() { kvSet('state', S); setTimeout(save, 10_000); })();
+(function save() {
+  try { kvSet('state', S); kvSet('gameTime', gameNow()); }
+  catch (e) { console.warn('[db] save failed:', e.message); }
+  setTimeout(save, 10_000);
+})();

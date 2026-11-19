@@ -32,9 +32,15 @@ unlock(adminToken);
 for (const b of document.querySelectorAll('#speed button[data-spd]')) {
   b.onclick = async () => {
     const r = await admin('/api/admin/speed', { speed: +b.dataset.spd });
-    if (r.status === 401) { adminToken = ''; store.set(''); showAdmin(false, 'token expired, unlock again'); }
+    if (r.status === 401) return relock();
+    if (r.ok) setActiveSpeed((await r.json()).speed);
   };
 }
+$('think-now').onclick = async () => {
+  const r = await admin('/api/admin/think');
+  if (r.status === 401) relock();
+};
+function relock() { adminToken = ''; store.set(''); showAdmin(false, 'token expired, unlock again'); }
 function setActiveSpeed(speed) {
   for (const b of document.querySelectorAll('#speed button[data-spd]')) b.classList.toggle('on', +b.dataset.spd === speed);
 }
@@ -70,7 +76,7 @@ async function loadDiary() {
 async function loadLog() {
   const ev = await get('/api/events');
   $('log').innerHTML = ev.length
-    ? ev.map(e => `<div class="log-line"><span>${e.hm}</span>${esc(e.text)}</div>`).join('')
+    ? ev.map(e => `<div class="log-line"><span>${esc(e.hm)}</span>${esc(e.text)}</div>`).join('')
     : '<p class="note">Nothing yet.</p>';
 }
 
